@@ -223,11 +223,21 @@ class AirLLMLlamaMlx:
     def __init__(self, model_local_path_or_repo_id, device="cuda:0", dtype=None, max_seq_len=512,
                  layer_shards_saving_path=None, profiling_mode=False, compression=None,
                  hf_token=None, prefetching=True, test_nonlayered=False, show_memory_util=False,
-                 delete_original=False):
+                 delete_original=False, keep_in_memory=False, quantize_bits=None):
+        """
+        keep_in_memory: load every layer once and keep it resident instead of re-reading each layer
+            from disk for every token. Much faster, but the whole model must fit in RAM.
+        quantize_bits: 4 or 8 to quantize the resident weights with MLX as they load (keep_in_memory
+            only). Cuts memory ~4x/2x and speeds decoding up further, at a small accuracy cost.
+        Both can also be set as attributes after construction, before the first generate().
+        """
 
         self.hf_token = hf_token
         self.set_layer_names_dict()
         self.test_nonlayered = test_nonlayered
+        self.keep_in_memory = keep_in_memory
+        self.quantize_bits = quantize_bits
+        self._resident = None
         self.show_memory_util = show_memory_util
         self.least_available = None
         self.initial_available = psutil.virtual_memory().available / 1024 / 1024
@@ -282,7 +292,67 @@ class AirLLMLlamaMlx:
         s = self.tokenizer.decode([t.item() for t in tokens])
         return s
 
+    def load_resident(self):
+        """Load (and optionally quantize) all layers once; reused by every later generate()."""
+        if self._resident is not None and self._resident["bits"] == self.quantize_bits:
+            return self._resident
+        self._resident = None
+        gc.collect()
+
+        persister = ModelPersister.get_model_persister()
+        names, args = self.layer_names_dict, self.model_args
+
+        def load(module, layer_name, key, index=None):
+            weights = persister.load_model(layer_name, self.checkpoint_path)[key]
+            module.update(weights if index is None else weights[index])
+            if self.quantize_bits:
+                if isinstance(module, (nn.Linear, nn.Embedding)):
+                    # nn.quantize only swaps child modules, so convert a bare layer directly
+                    module = module.to_quantized(group_size=64, bits=self.quantize_bits)
+                elif not isinstance(module, RMSNorm):
+                    nn.quantize(module, group_size=64, bits=self.quantize_bits)
+            # materialize now so each layer's fp16 copy is freed before the next one loads
+            mx.eval(module.parameters())
+            return module
+
+        embed = load(nn.Embedding(args.vocab_size, args.dim), names['embed'], 'tok_embeddings')
+        layers = [load(TransformerBlock(args=args), f'{names["layer_prefix"]}.{i}', 'layers', i)
+                  for i in tqdm(range(args.n_layers), desc='loading layers')]
+        norm = load(RMSNorm(args.dim, eps=args.norm_eps), names['norm'], 'norm')
+        output = load(nn.Linear(args.dim, args.vocab_size, bias=False), names['lm_head'], 'output')
+
+        self._resident = {"bits": self.quantize_bits, "embed": embed, "layers": layers,
+                          "norm": norm, "output": output}
+        return self._resident
+
+    def _resident_generate(self, x, temperature=0):
+        # Everything is already in memory, so build each token's whole graph and evaluate it once.
+        # The layer-streaming path below has to force evaluation after every layer to bound memory.
+        m = self.load_resident()
+        embed, layers, norm, output = m["embed"], m["layers"], m["norm"], m["output"]
+
+        mask = nn.MultiHeadAttention.create_additive_causal_mask(x.shape[1]).astype(norm.weight.dtype)
+        cache = [None] * len(layers)
+        h = embed(x)
+        for i, layer in enumerate(layers):
+            h, cache[i] = layer(h, mask=mask)
+        y = sample(output(norm(h[:, -1])), temperature)
+        mx.eval(y)
+        yield y
+
+        while True:
+            h = embed(y[:, None])
+            for i, layer in enumerate(layers):
+                h, cache[i] = layer(h, mask=None, cache=cache[i])
+            y = sample(output(norm(h[:, -1])), temperature)
+            mx.eval(y)
+            yield y
+
     def model_generate(self, x, temperature=0, max_new_tokens=None):
+        if self.keep_in_memory:
+            yield from self._resident_generate(x, temperature)
+            return
+
         cache = []
         TEST_NO_LAYERED = True
 

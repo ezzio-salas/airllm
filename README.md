@@ -200,12 +200,15 @@ from airllm import AutoModel
 
 model = AutoModel.from_pretrained("TinyLlama/TinyLlama-1.1B-Chat-v1.0")
 
-input_tokens = model.tokenizer(["What is the capital of United States?"],
+# chat models expect their chat template; without it they may end the turn immediately
+input_ids = model.tokenizer.apply_chat_template(
+    [{"role": "user", "content": "What is the capital of United States?"}],
+    add_generation_prompt=True,
     return_tensors="pt",
-    return_attention_mask=False)
+    return_dict=True)['input_ids']
 
-output = model.generate(input_tokens['input_ids'], max_new_tokens=20)  # returns the decoded string
-print(output)
+output = model.generate(input_ids, max_new_tokens=20)  # returns the decoded string
+print(output)  # The capital of the United States is Washington, D.C.
 ```
 
 `generate` accepts torch tensors, numpy arrays, `mx.array` or plain lists of token ids, stops at the EOS token, and defaults to 20 new tokens.
@@ -215,6 +218,34 @@ Things to know:
 * only [Apple silicon](https://support.apple.com/en-us/HT211814) (M1 and later) is supported, with a native arm64 Python (3.10+ recommended; see [here](https://stackoverflow.com/a/65432861/21230266))
 * the MacOS backend supports **Llama-architecture** models (Llama, TinyLlama, Yi, Platypus2, ...); the other families and [Training](#training) need a CUDA GPU
 * the VRAM numbers in this README are CUDA figures. On a Mac, CPU and GPU share unified memory, so on an 8GB machine expect 7B–13B models to be practical; bigger models still stream layer by layer, just slowly
+
+For a browser chat UI (model stays loaded, replies stream token by token):
+
+```bash
+pip install gradio
+python air_llm/examples/mac_chat_ui.py    # open http://127.0.0.1:7860
+```
+
+#### Faster on MacOS when the model fits in RAM
+
+By default every layer is re-read from disk for every token, which is what lets any size of model run. When the model fits in RAM, keep it resident instead, and optionally quantize it with MLX as it loads:
+
+```python
+model = AutoModel.from_pretrained("TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+                                  keep_in_memory=True,  # load layers once, reuse them for every token
+                                  quantize_bits=4)      # optional: 4 or 8; ~4x/2x less memory, faster
+```
+
+TinyLlama-1.1B on an 8GB M3:
+
+| mode | tokens/s | output |
+|---|---|---|
+| default (stream layers from disk) | 0.5 | reference |
+| `keep_in_memory=True` | 38 | identical |
+| `keep_in_memory=True, quantize_bits=8` | 64 | near-identical |
+| `keep_in_memory=True, quantize_bits=4` | 101 | small quality cost |
+
+Quantized weights take ~4x (4-bit) or ~2x (8-bit) less memory, so larger models fit in RAM too. The chat UI turns `keep_in_memory` on automatically when the model fits (`--keep-in-memory auto|on|off`) and takes `--quantize off|8|4`.
 
 Example [python notebook](https://github.com/lyogavin/airllm/blob/main/air_llm/examples/run_on_macos.ipynb)
 
