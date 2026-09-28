@@ -216,6 +216,13 @@ Things to know:
 * the MacOS backend supports **Llama-architecture** models (Llama, TinyLlama, Yi, Platypus2, ...); the other families and [Training](#training) need a CUDA GPU
 * the VRAM numbers in this README are CUDA figures. On a Mac, CPU and GPU share unified memory, so on an 8GB machine expect 7B–13B models to be practical; bigger models still stream layer by layer, just slowly
 
+For a browser chat UI (model stays loaded, replies stream token by token):
+
+```bash
+pip install gradio
+python air_llm/examples/mac_chat_ui.py    # open http://127.0.0.1:7860
+```
+
 Example [python notebook](https://github.com/lyogavin/airllm/blob/main/air_llm/examples/run_on_macos.ipynb)
 
 
