@@ -223,6 +223,8 @@ pip install gradio
 python air_llm/examples/mac_chat_ui.py    # open http://127.0.0.1:7860
 ```
 
+When the model fits in RAM, the UI keeps every layer in memory instead of re-reading them from disk for each token: TinyLlama-1.1B goes from ~0.5 to ~7.5 tokens/s on an M3. Bigger models fall back to streaming automatically; force either with `--keep-in-memory on|off`. In your own code the same switch is `model.test_nonlayered = True`.
+
 Example [python notebook](https://github.com/lyogavin/airllm/blob/main/air_llm/examples/run_on_macos.ipynb)
 
 
