@@ -6,6 +6,15 @@ if platform == "darwin":
     is_on_mac_os = True
 
 if is_on_mac_os:
+    try:
+        import mlx.core  # noqa: F401
+        import psutil  # noqa: F401
+    except ImportError as _e:
+        raise ImportError(
+            f"airllm on MacOS runs on Apple's MLX backend, which is not installed ({_e}). "
+            'Install it with: pip install "airllm[mac]" (Apple silicon only).'
+        ) from _e
+
     from .airllm_llama_mlx import AirLLMLlamaMlx
     from .auto_model import AutoModel
 else:

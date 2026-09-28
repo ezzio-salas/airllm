@@ -94,6 +94,8 @@ First, install the airllm pip package.
 pip install airllm
 ```
 
+On an Apple silicon Mac, use `pip install "airllm[mac]"` instead. See [MacOS](#macos).
+
 ### 2. Inference
 
 Then, initialize AirLLMLlama2, pass in the huggingface repo ID of the model being used, or the local path, and inference can be performed similar to a regular transformer model.
@@ -181,13 +183,40 @@ When initialize the model, we support the following configurations:
 
 ## MacOS
 
-Just install airllm and run the code the same as on linux. See more in [Quick Start](#quickstart).
+On MacOS, AirLLM runs on Apple's [MLX](https://github.com/ml-explore/mlx) backend. Install it with the `mac` extra:
 
-* make sure you installed [mlx](https://github.com/ml-explore/mlx?tab=readme-ov-file#installation) and torch
-* you probably need to install python native see more [here](https://stackoverflow.com/a/65432861/21230266)
-* only [Apple silicon](https://support.apple.com/en-us/HT211814) is supported
+```bash
+pip install "airllm[mac]"
+# or, from a local checkout:
+pip install -e "./air_llm[mac]"
+```
 
-Example [python notebook] (https://github.com/lyogavin/airllm/blob/main/air_llm/examples/run_on_macos.ipynb)
+Without the extra, `import airllm` raises an `ImportError` telling you to install it.
+
+Then run the same code as the [Quick Start](#quickstart), minus `.cuda()` (there is no CUDA on a Mac):
+
+```python
+from airllm import AutoModel
+
+model = AutoModel.from_pretrained("TinyLlama/TinyLlama-1.1B-Chat-v1.0")
+
+input_tokens = model.tokenizer(["What is the capital of United States?"],
+    return_tensors="pt",
+    return_attention_mask=False)
+
+output = model.generate(input_tokens['input_ids'], max_new_tokens=20)  # returns the decoded string
+print(output)
+```
+
+`generate` accepts torch tensors, numpy arrays, `mx.array` or plain lists of token ids, stops at the EOS token, and defaults to 20 new tokens.
+
+Things to know:
+
+* only [Apple silicon](https://support.apple.com/en-us/HT211814) (M1 and later) is supported, with a native arm64 Python (3.10+ recommended; see [here](https://stackoverflow.com/a/65432861/21230266))
+* the MacOS backend supports **Llama-architecture** models (Llama, TinyLlama, Yi, Platypus2, ...); the other families and [Training](#training) need a CUDA GPU
+* the VRAM numbers in this README are CUDA figures. On a Mac, CPU and GPU share unified memory, so on an 8GB machine expect 7B–13B models to be practical; bigger models still stream layer by layer, just slowly
+
+Example [python notebook](https://github.com/lyogavin/airllm/blob/main/air_llm/examples/run_on_macos.ipynb)
 
 
 ## Example Python Notebook
