@@ -40,6 +40,13 @@ setuptools.setup(
         # 'compressed-tensors' is optional too: only checkpoints stored in that format (Kimi K3's
         # MXFP4 weights) need it, and transformers raises a clear error naming it when it is missing.
     ],
+    extras_require={
+        # Apple silicon: `pip install "airllm[mac]"` pulls in the MLX backend that MacOS runs on.
+        "mac": [
+            'mlx>=0.20; sys_platform == "darwin" and platform_machine == "arm64"',
+            'psutil',
+        ],
+    },
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: Apache Software License",

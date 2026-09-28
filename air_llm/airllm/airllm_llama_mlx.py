@@ -182,6 +182,19 @@ def sample(logits, temperature=0):
     else:
         return mx.random.categorical(logits * (1 / temperature))
 
+
+# Matches the transformers default when a caller does not pass max_new_tokens.
+DEFAULT_MAX_NEW_TOKENS = 20
+
+
+def to_mx_array(x):
+    """Accept an mx.array, numpy array, torch tensor or nested list of token ids."""
+    if isinstance(x, mx.array):
+        return x
+    if hasattr(x, "detach"):  # torch.Tensor, without importing torch
+        x = x.detach().cpu().numpy()
+    return mx.array(x)
+
 class AirLLMLlamaMlx:
 
     # customize layer names here
@@ -250,10 +263,17 @@ class AirLLMLlamaMlx:
 
 
     def generate(self, x, temperature=0, max_new_tokens=None, **kwargs):
-        tokens = []
-        for token in self.model_generate(x, temperature=temperature):
-            tokens.append(token)
+        # HF-style kwargs (use_cache, return_dict_in_generate, ...) are accepted and ignored so the
+        # same call works on CUDA and on MacOS.
+        if max_new_tokens is None:
+            max_new_tokens = DEFAULT_MAX_NEW_TOKENS
+        eos_token_id = getattr(self.tokenizer, "eos_token_id", None)
 
+        tokens = []
+        for token in self.model_generate(to_mx_array(x), temperature=temperature):
+            if token.item() == eos_token_id:
+                break
+            tokens.append(token)
 
             if len(tokens) >= max_new_tokens:
                 break
@@ -349,7 +369,7 @@ class AirLLMLlamaMlx:
             del self.output
             gc.collect()
         self.record_memory('after_lmhead')
-        y = sample(y)
+        y = sample(y, temperature)
 
 
         # y now has size [1]
@@ -425,7 +445,7 @@ class AirLLMLlamaMlx:
             if not self.test_nonlayered:
                 self.output = nn.Linear(self.model_args.dim, self.model_args.vocab_size, bias=False)
                 self.output.update(ModelPersister.get_model_persister().load_model(self.layer_names_dict['lm_head'], self.checkpoint_path)['output'])
-            y = sample(self.output(x[:, -1]))
+            y = sample(self.output(x[:, -1]), temperature)
 
             # force execution
             mx.eval(y)
