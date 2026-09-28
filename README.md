@@ -200,12 +200,15 @@ from airllm import AutoModel
 
 model = AutoModel.from_pretrained("TinyLlama/TinyLlama-1.1B-Chat-v1.0")
 
-input_tokens = model.tokenizer(["What is the capital of United States?"],
+# chat models expect their chat template; without it they may end the turn immediately
+input_ids = model.tokenizer.apply_chat_template(
+    [{"role": "user", "content": "What is the capital of United States?"}],
+    add_generation_prompt=True,
     return_tensors="pt",
-    return_attention_mask=False)
+    return_dict=True)['input_ids']
 
-output = model.generate(input_tokens['input_ids'], max_new_tokens=20)  # returns the decoded string
-print(output)
+output = model.generate(input_ids, max_new_tokens=20)  # returns the decoded string
+print(output)  # The capital of the United States is Washington, D.C.
 ```
 
 `generate` accepts torch tensors, numpy arrays, `mx.array` or plain lists of token ids, stops at the EOS token, and defaults to 20 new tokens.
