@@ -87,5 +87,74 @@ class TestGenerate(unittest.TestCase):
         self.assertIsInstance(model.seen_inputs[0], mx.array)
 
 
+def _tiny_model():
+    """A 2-layer random Llama served from memory instead of a split checkpoint on disk."""
+    import mlx.nn as nn
+    from unittest import mock
+    from airllm.airllm_llama_mlx import ModelArgs, RMSNorm, TransformerBlock
+
+    args = ModelArgs(dim=64, n_layers=2, head_dim=16, hidden_dim=128, n_heads=4, n_kv_heads=2,
+                     norm_eps=1e-5, vocab_size=128, rope_theta=1e4, rope_traditional=False)
+    mx.random.seed(0)
+    weights = {
+        "model.embed_tokens": {"tok_embeddings": nn.Embedding(args.vocab_size, args.dim).parameters()},
+        "model.norm": {"norm": RMSNorm(args.dim).parameters()},
+        "lm_head": {"output": nn.Linear(args.dim, args.vocab_size, bias=False).parameters()},
+    }
+    for i in range(args.n_layers):
+        weights[f"model.layers.{i}"] = {"layers": {i: TransformerBlock(args).parameters()}}
+
+    persister = mock.Mock()
+    persister.load_model.side_effect = lambda name, path: weights[name]
+
+    model = AirLLMLlamaMlx.__new__(AirLLMLlamaMlx)
+    model.set_layer_names_dict()
+    model.model_args, model.checkpoint_path = args, "unused"
+    model.test_nonlayered, model.show_memory_util = False, False
+    model.keep_in_memory, model.quantize_bits, model._resident = False, None, None
+    return model, mock.patch("airllm.airllm_llama_mlx.ModelPersister.get_model_persister",
+                             return_value=persister), persister
+
+
+def _take(gen, n):
+    return [next(gen).item() for _ in range(n)]
+
+
+@unittest.skipIf(mx is None, "mlx is not installed")
+class TestKeepInMemory(unittest.TestCase):
+    PROMPT = [[1, 5, 9, 17]]
+
+    def test_matches_layer_streaming(self):
+        model, patch, _ = _tiny_model()
+        with patch:
+            streamed = _take(model.model_generate(mx.array(self.PROMPT)), 8)
+            model.keep_in_memory = True
+            resident = _take(model.model_generate(mx.array(self.PROMPT)), 8)
+        self.assertEqual(resident, streamed)
+
+    def test_loads_weights_once_across_calls(self):
+        model, patch, persister = _tiny_model()
+        model.keep_in_memory = True
+        with patch:
+            first = _take(model.model_generate(mx.array(self.PROMPT)), 4)
+            loads = persister.load_model.call_count
+            second = _take(model.model_generate(mx.array(self.PROMPT)), 4)
+        self.assertEqual(first, second)
+        self.assertEqual(persister.load_model.call_count, loads)
+
+    def test_quantized(self):
+        import mlx.nn as nn
+
+        model, patch, _ = _tiny_model()
+        model.keep_in_memory, model.quantize_bits = True, 4
+        with patch:
+            tokens = _take(model.model_generate(mx.array(self.PROMPT)), 4)
+        r = model._resident
+        self.assertIsInstance(r["embed"], nn.QuantizedEmbedding)
+        self.assertIsInstance(r["output"], nn.QuantizedLinear)
+        self.assertIsInstance(r["layers"][0].attention.wq, nn.QuantizedLinear)
+        self.assertTrue(all(0 <= t < model.model_args.vocab_size for t in tokens))
+
+
 if __name__ == "__main__":
     unittest.main()

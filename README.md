@@ -223,7 +223,26 @@ pip install gradio
 python air_llm/examples/mac_chat_ui.py    # open http://127.0.0.1:7860
 ```
 
-When the model fits in RAM, the UI keeps every layer in memory instead of re-reading them from disk for each token: TinyLlama-1.1B goes from ~0.5 to ~7.5 tokens/s on an M3. Bigger models fall back to streaming automatically; force either with `--keep-in-memory on|off`. In your own code the same switch is `model.test_nonlayered = True`.
+#### Faster on MacOS when the model fits in RAM
+
+By default every layer is re-read from disk for every token, which is what lets any size of model run. When the model fits in RAM, keep it resident instead, and optionally quantize it with MLX as it loads:
+
+```python
+model = AutoModel.from_pretrained("TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+                                  keep_in_memory=True,  # load layers once, reuse them for every token
+                                  quantize_bits=4)      # optional: 4 or 8; ~4x/2x less memory, faster
+```
+
+TinyLlama-1.1B on an 8GB M3:
+
+| mode | tokens/s | output |
+|---|---|---|
+| default (stream layers from disk) | 0.5 | reference |
+| `keep_in_memory=True` | 38 | identical |
+| `keep_in_memory=True, quantize_bits=8` | 64 | near-identical |
+| `keep_in_memory=True, quantize_bits=4` | 101 | small quality cost |
+
+Quantized weights take ~4x (4-bit) or ~2x (8-bit) less memory, so larger models fit in RAM too. The chat UI turns `keep_in_memory` on automatically when the model fits (`--keep-in-memory auto|on|off`) and takes `--quantize off|8|4`.
 
 Example [python notebook](https://github.com/lyogavin/airllm/blob/main/air_llm/examples/run_on_macos.ipynb)
 
